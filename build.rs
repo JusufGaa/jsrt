@@ -2,7 +2,6 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// 精确版本，唯一需要升级时改动的地方
 const VUE_VERSION: &str = "3.5.17";
 const VUE_FILE: &str = "dist/vue.runtime.global.prod.js";
 

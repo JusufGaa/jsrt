@@ -1,4 +1,5 @@
 pub use crate::value;
+pub mod global_this;
 
 pub(crate) trait WorkerPrivate {
     fn set_file_name(&mut self, file_name: impl Into<String>) ;
