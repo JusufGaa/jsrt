@@ -1,6 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use crate::value::{Name, Value, ValueNode, ValueWithIndex};
+use crate::value::{Name, Value};
 
 pub(crate) enum NodeOperation {
     Insert(Name, Value),
@@ -51,7 +49,7 @@ impl GlobalThis {
         }
     }
 
-    pub fn push(&mut self, mut new_value: GlobalThisLogPage) {
+    pub fn push(&mut self, new_value: GlobalThisLogPage) {
         let old = std::mem::replace(&mut self.root, new_value);
         self.root.parent = Some(Box::new(old));
         for op in &self.root.operations {

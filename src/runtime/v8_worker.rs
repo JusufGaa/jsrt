@@ -1,5 +1,6 @@
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use v8::{
     Global, OwnedIsolate, PinScope, Context,
     Local, Value as V8Value, Array, GetPropertyNamesArgs,
@@ -11,6 +12,7 @@ use serde_json::{
 };
 use std::collections::HashSet;
 use crate::runtime::value;
+use crate::runtime::WorkerPrivate;
 
 pub struct V8Worker {
     file_name: Option<String>,
@@ -148,8 +150,8 @@ impl super::Worker for V8Worker {
         }
     }
 
-    fn eval(&mut self, code: impl Into<String>) -> value::Value {
-        self.eval_with_origin(&* code.into(), V8ScriptOrigin {
+    fn eval(&mut self, code: impl AsRef<str>) -> value::Value {
+        self.eval_with_origin(code.as_ref(), V8ScriptOrigin {
             resource_line_offset: 0,
             resource_column_offset: 0,
             resource_is_shared_cross_origin: false,
@@ -158,6 +160,44 @@ impl super::Worker for V8Worker {
             is_wasm: false,
             is_module: false,
         }).unwrap_or(value::Value::Primitive(value::PrimitiveValue::Null))
+    }
+
+    fn import(&mut self, module_name: impl AsRef<Path>) -> value::Value {
+        let path = self.resolve_module_path(module_name.as_ref());
+        let code = match std::fs::read_to_string(&path) {
+            Ok(code) => code,
+            Err(_) => return value::Value::Primitive(value::PrimitiveValue::Null),
+        };
+
+        let prev_file_name = self.file_name.take();
+        self.set_file_name(path.display().to_string());
+        let result = self.eval_with_origin(&code, V8ScriptOrigin {
+            resource_line_offset: 0,
+            resource_column_offset: 0,
+            resource_is_shared_cross_origin: false,
+            script_id: -1,
+            resource_is_opaque: true,
+            is_wasm: false,
+            is_module: false,
+        });
+        self.file_name = prev_file_name;
+
+        result.unwrap_or(value::Value::Primitive(value::PrimitiveValue::Null))
+    }
+}
+
+impl V8Worker {
+    /// 解析模块路径：绝对路径直接使用；相对路径基于当前 file_name 的目录解析，
+    /// 若当前没有 file_name 则基于进程工作目录。
+    fn resolve_module_path(&self, module_name: &Path) -> PathBuf {
+        if module_name.is_absolute() {
+            return module_name.to_path_buf();
+        }
+        let base = self.file_name.as_ref()
+            .and_then(|f| Path::new(f).parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        base.join(module_name)
     }
 }
 

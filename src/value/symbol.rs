@@ -40,7 +40,7 @@ impl Symbol {
         let registry = registry.lock().unwrap();
         let desc = self.description.as_ref().unwrap();
         if let Some(sym) = registry.get(desc) {
-            if std::ptr::eq(sym, self) {
+            if std::ptr::eq(*sym, self) {
                 return Some(desc.clone());
             }
         }
