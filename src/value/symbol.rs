@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Mutex, OnceLock};
 
+static SYMBOL_REGISTRY: OnceLock<Mutex<HashMap<String, &'static Symbol>>> = OnceLock::new();
 static SYMBOL_POOL: OnceLock<Mutex<Vec<&'static Symbol>>> = OnceLock::new();
 
 pub struct Symbol {
@@ -14,6 +16,35 @@ impl Symbol {
 
     pub fn new_with_description(description: impl Into<String>) -> &'static Symbol {
         Self::intern(Some(description.into()))
+    }
+
+    pub fn r#for(key: impl Into<String>) -> &'static Symbol {
+        let key = key.into();
+        let registry = SYMBOL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut registry = registry.lock().unwrap();
+        if let Some(&symbol) = registry.get(&key) {
+            return symbol;
+        }
+        let symbol: &'static Symbol = Box::leak(Box::new(Symbol {
+            description: Some(key.clone()),
+        }));
+        registry.insert(key, symbol);
+        symbol
+    }
+
+    pub fn key_for(self: &'static Self) -> Option<String> {
+        if self.description.is_none() {
+            return None;
+        }
+        let registry = SYMBOL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+        let registry = registry.lock().unwrap();
+        let desc = self.description.as_ref().unwrap();
+        if let Some(sym) = registry.get(desc) {
+            if std::ptr::eq(sym, self) {
+                return Some(desc.clone());
+            }
+        }
+        None
     }
 
     fn intern(description: Option<String>) -> &'static Symbol {
@@ -37,18 +68,6 @@ impl fmt::Debug for Symbol {
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
-    }
-}
-
-impl PartialOrd for Symbol {
-    fn partial_cmp(&self, other: &Symbol) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Symbol {
-    fn cmp(&self, other: &Symbol) -> std::cmp::Ordering {
-        std::ptr::from_ref::<Symbol>(self).cmp(&std::ptr::from_ref::<Symbol>(other))
     }
 }
 
