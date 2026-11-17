@@ -1,5 +1,5 @@
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 pub mod name;
@@ -20,7 +20,7 @@ pub(crate) enum ValueWithIndex {
 pub(crate) enum ValueNode {
     Primitive(PrimitiveValue),
     Array(Vec<ValueWithIndex>),
-    Object(BTreeMap<Name, ValueWithIndex>),
+    Object(HashMap<Name, ValueWithIndex>),
 }
 
 pub struct Value {
@@ -28,7 +28,7 @@ pub struct Value {
     pub(crate) nodes: Vec<ValueNode>,
 }
 
-pub type Map<V, K = String> = BTreeMap<K, V>;
+pub type Map<V, K = String> = HashMap<K, V>;
 
 #[allow(non_snake_case)]
 impl Value {

@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::symbol::Symbol;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Name {
     String(String),
     Symbol(&'static Symbol),

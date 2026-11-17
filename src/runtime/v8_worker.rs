@@ -1,5 +1,3 @@
-use std::rc::Rc;
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use v8::{
     Global, OwnedIsolate, PinScope, Context,
@@ -12,13 +10,13 @@ use serde_json::{
 };
 use std::collections::HashSet;
 use crate::runtime::value;
-use crate::runtime::WorkerPrivate;
 
 pub struct V8Worker {
     file_name: Option<String>,
-    isolate: Rc<RefCell<OwnedIsolate>>,
-    context: Rc<RefCell<Global<Context>>>,
-    snapshots: Rc<RefCell<Vec<JsonValue>>>,
+    cached_code: Vec<String>,
+    isolate: OwnedIsolate,
+    context: Global<Context>,
+    snapshots: Vec<JsonValue>,
 }
 
 pub struct V8ScriptOrigin {
@@ -46,21 +44,22 @@ impl V8Worker {
 
         V8Worker {
             file_name: None,
-            isolate: Rc::new(RefCell::new(isolate)),
-            context: Rc::new(RefCell::new(context)),
-            snapshots: Rc::new(RefCell::new(Vec::new())),
+            cached_code: Vec::new(),
+            isolate,
+            context,
+            snapshots: Vec::new(),
         }
     }
 
-    fn eval_with_origin(&mut self, code: &str, origin: impl Into<Option<V8ScriptOrigin>>) -> Option<value::Value> { 
-        let mut isolate = self.isolate.borrow_mut();
-        let context = self.context.borrow();
+    fn eval_with_origin(&mut self, code: &str, origin: impl Into<Option<V8ScriptOrigin>>) -> Option<value::Value> {
+        let isolate = &mut self.isolate;
+        let context = &self.context;
 
         let mut pinned =
-                std::pin::pin!(v8::HandleScope::new(&mut *isolate));
+                std::pin::pin!(v8::HandleScope::new(isolate));
         let mut scope = pinned.as_mut().init();
 
-        let ctx = Global::<Context>::new(&scope, &*context);
+        let ctx = Global::<Context>::new(&scope, context);
         let ctx = Local::new(&scope, ctx);
 
         let mut ctx_scope = v8::ContextScope::new(&mut scope, ctx);
@@ -102,22 +101,16 @@ impl V8Worker {
     }
 }
 
-impl super::WorkerPrivate for V8Worker {
-    fn set_file_name(&mut self, file_name: impl Into<String>) {
-        self.file_name = Some(file_name.into());
-    }
-}
-
 impl super::Worker for V8Worker {
     fn save(&mut self) {
-        let mut isolate = self.isolate.borrow_mut();
-        let context = self.context.borrow();
+        let isolate = &mut self.isolate;
+        let context = &self.context;
 
         let mut pinned =
-            std::pin::pin!(v8::HandleScope::new(&mut *isolate));
+            std::pin::pin!(v8::HandleScope::new(isolate));
         let mut scope = pinned.as_mut().init();
 
-        let ctx = Local::new(&scope, &*context);
+        let ctx = Local::new(&scope, context);
         let mut ctx_scope = v8::ContextScope::new(&mut scope, ctx);
         let mut pinned2 = std::pin::pin!(v8::HandleScope::new(&mut ctx_scope));
         let scope2 = pinned2.as_mut().init();
@@ -125,12 +118,12 @@ impl super::Worker for V8Worker {
         let global = ctx.global(&scope2);
         let snapshot = v8_value_to_json(&scope2, global.into());
 
-        self.snapshots.borrow_mut().push(snapshot);
+        self.snapshots.push(snapshot);
     }
 
     fn restore(&mut self) {
         let context = {
-            let isolate = &mut *self.isolate.borrow_mut();
+            let isolate = &mut self.isolate;
             let mut pinned =
                 std::pin::pin!(v8::HandleScope::<Context>::new(isolate));
             let scope = pinned.as_mut().init();
@@ -138,20 +131,29 @@ impl super::Worker for V8Worker {
             let ctx = v8::Context::new(&scope, Default::default());
             Global::new(&scope, ctx)
         };
-        self.context.replace(context);
+        self.context = context;
 
-        let t = self.snapshots.borrow_mut().pop();
+        let t = self.snapshots.pop();
         if let Some(snap) = t {
             let code = snap.as_object().unwrap().iter().map(|(key, value)| {
-                format!("var {} = {};", key, value)
+                let key = serde_json::to_string(key).unwrap();
+                format!("globalThis[{}] = {};", key, value)
             }).reduce(|a, b| format!("{}\n{}", a, b)).unwrap();
 
             self.eval_with_origin(&*code, None);
         }
     }
 
-    fn eval(&mut self, code: impl AsRef<str>) -> value::Value {
-        self.eval_with_origin(code.as_ref(), V8ScriptOrigin {
+    fn load(&mut self, code: impl AsRef<str>) {
+        self.cached_code.push(code.as_ref().to_string());
+    }
+
+    fn run(&mut self) -> value::Value {
+        let code = std::mem::take(&mut self.cached_code).join("\n");
+        if code.is_empty() {
+            return value::Value::Primitive(value::PrimitiveValue::Null);
+        }
+        self.eval_with_origin(&code, V8ScriptOrigin {
             resource_line_offset: 0,
             resource_column_offset: 0,
             resource_is_shared_cross_origin: false,
@@ -170,7 +172,7 @@ impl super::Worker for V8Worker {
         };
 
         let prev_file_name = self.file_name.take();
-        self.set_file_name(path.display().to_string());
+        self.file_name = Some(path.display().to_string());
         let result = self.eval_with_origin(&code, V8ScriptOrigin {
             resource_line_offset: 0,
             resource_column_offset: 0,
@@ -187,8 +189,6 @@ impl super::Worker for V8Worker {
 }
 
 impl V8Worker {
-    /// 解析模块路径：绝对路径直接使用；相对路径基于当前 file_name 的目录解析，
-    /// 若当前没有 file_name 则基于进程工作目录。
     fn resolve_module_path(&self, module_name: &Path) -> PathBuf {
         if module_name.is_absolute() {
             return module_name.to_path_buf();

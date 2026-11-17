@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
 static SYMBOL_REGISTRY: OnceLock<Mutex<HashMap<String, &'static Symbol>>> = OnceLock::new();
@@ -78,3 +79,10 @@ impl PartialEq for Symbol {
 }
 
 impl Eq for Symbol {}
+
+impl Hash for Symbol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // 与按指针判等保持一致：同一驻留符号哈希相同。
+        (std::ptr::from_ref::<Symbol>(self) as usize).hash(state);
+    }
+}

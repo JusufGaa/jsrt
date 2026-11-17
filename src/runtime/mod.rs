@@ -3,15 +3,16 @@ pub mod global_this;
 
 use std::path::Path;
 
-pub(crate) trait WorkerPrivate {
-    fn set_file_name(&mut self, file_name: impl Into<String>) ;
-}
-
-pub trait Worker: WorkerPrivate {
+pub trait Worker {
     fn save(&mut self);
     fn restore(&mut self);
-    fn eval(&mut self, code: impl AsRef<str>) -> value::Value;
+    fn load(&mut self, code: impl AsRef<str>);
+    fn run(&mut self) -> value::Value;
     fn import(&mut self, module_name: impl AsRef<Path>) -> value::Value;
+    fn eval(&mut self, code: impl AsRef<str>) -> value::Value {
+        self.load(code);
+        self.run()
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -36,11 +37,5 @@ macro_rules! worker {
         {
             $crate::runtime::v8_worker::V8Worker::new()
         }
-    }};
-    ($file:expr $(,)?) => {{
-        let worker = worker!();
-        worker.import($file);
-        worker.save();
-        worker
     }};
 }
