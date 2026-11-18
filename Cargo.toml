@@ -3,6 +3,10 @@ name = "jsrt"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+quickjs = []
+
 [[example]]
 name = "hello"
 path = "examples/hello.rs"
@@ -12,7 +16,7 @@ num-bigint = "=0.5.1"
 oxc = "=0.156.0"
 serde_json = "=1.0.154"
 
-[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+[target.'cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", feature = "quickjs")))'.dependencies]
 v8 = "152.2.0"
 
 [build-dependencies]
