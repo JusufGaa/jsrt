@@ -5,6 +5,7 @@ use std::fmt;
 pub mod name;
 pub mod primitive_value;
 pub mod symbol;
+pub mod context;
 
 pub use name::Name;
 pub use primitive_value::PrimitiveValue;
