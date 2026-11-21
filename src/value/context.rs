@@ -1,20 +1,7 @@
-use std::collections::HashMap;
-use super::name::Name;
+use super::collection::Collection;
 use super::primitive_value::PrimitiveValue;
+use super::value_or_point::ValueOrPoint;
 
-enum ValueOrPoint {
-    Value(PrimitiveValue),
-    Point(usize),
-}
-
-enum Value {
-    PriObject(HashMap<Name, PrimitiveValue>),
-    PriArray(Vec<PrimitiveValue>),
-    PtObject(HashMap<Name, usize>),
-    PtArray(Vec<usize>),
-    Object(HashMap<Name, ValueOrPoint>),
-    Array(Vec<ValueOrPoint>),
-}
 /// 分步式代理读取：ctx.get(index) 得到 Pending（过程态），pending.get(name) 继续解析
 pub(crate) trait Get<T> {
     fn get<'a>(&'a self, key: T) -> Pending<'a>;
@@ -34,8 +21,8 @@ impl Get<usize> for Context {
     }
 }
 
-impl Get<Name> for Pending<'_> {
-    fn get<'b>(&'b self, name: Name) -> Pending<'b> {
+impl Get<&str> for Pending<'_> {
+    fn get<'b>(&'b self, name: &str) -> Pending<'b> {
         match self {
             Pending::Process(ctx, index) => {
                 let (ctx, index) = (*ctx, *index);
@@ -48,21 +35,14 @@ impl Get<Name> for Pending<'_> {
                     }
                     path.push(cursor);
                     match ctx.heap.get(cursor) {
-                        // PriObject 直接命中原始值
-                        Some(Value::PriObject(map)) => break map.get(&name),
+                        // PriPt 的键查找暂缺，读不到视为无属性
+                        Some(Collection::PriPt(_)) => break None,
                         // 数组没有命名属性，槽位不存在同样视为读不到
-                        None | Some(Value::PriArray(_) | Value::PtArray(_) | Value::Array(_)) => {
-                            break None
-                        }
-                        // PtObject：属性是指针，前进到目标槽位继续读
-                        Some(Value::PtObject(map)) => match map.get(&name) {
-                            Some(&next) => cursor = next,
-                            None => break None,
-                        },
+                        None | Some(Collection::Array(_)) => break None,
                         // Object：属性是原始值则命中，是指针则前进继续读
-                        Some(Value::Object(map)) => match map.get(&name) {
+                        Some(Collection::Object(map)) => match map.get(name) {
                             Some(ValueOrPoint::Value(p)) => break Some(p),
-                            Some(ValueOrPoint::Point(i)) => cursor = *i,
+                            Some(ValueOrPoint::Point(next)) => cursor = *next,
                             None => break None,
                         },
                     }
@@ -195,7 +175,7 @@ impl<'a> Pending<'a> {
 }
 
 pub struct Context {
-    heap: Vec<Value>,
+    heap: Vec<Collection>,
     root: Vec<usize>,
 }
 
@@ -231,18 +211,14 @@ impl Context {
                 continue;
             }
             match &mut self.heap[i] {
-                // PriObject/PriArray 只含原始值，无指针
-                Value::PriObject(_) | Value::PriArray(_) => {}
-                Value::PtObject(map) => map.values_mut().for_each(&mut update),
-                Value::PtArray(items) => items.iter_mut().for_each(&mut update),
-                Value::Object(map) => {
-                    for v in map.values_mut() {
-                        if let ValueOrPoint::Point(p) = v {
-                            update(p);
-                        }
+                // PriPt 的指针槽位遍历暂缺，pt 形态尚未投入使用
+                Collection::PriPt(_) => {}
+                Collection::Object(map) => map.values_mut().for_each(|v| {
+                    if let ValueOrPoint::Point(p) = v {
+                        update(p);
                     }
-                }
-                Value::Array(items) => {
+                }),
+                Collection::Array(items) => {
                     for v in items.iter_mut() {
                         if let ValueOrPoint::Point(p) = v {
                             update(p);
@@ -279,18 +255,14 @@ impl Context {
             }
             marked[i] = true;
             match &self.heap[i] {
-                // PriObject/PriArray 只含原始值，无子引用
-                Value::PriObject(_) | Value::PriArray(_) => {}
-                Value::PtObject(map) => stack.extend(map.values().copied()),
-                Value::PtArray(items) => stack.extend(items.iter().copied()),
-                Value::Object(map) => {
-                    for v in map.values() {
-                        if let ValueOrPoint::Point(p) = v {
-                            stack.push(*p);
-                        }
+                // PriPt 的指针槽位遍历暂缺，pt 形态尚未投入使用
+                Collection::PriPt(_) => {}
+                Collection::Object(map) => map.values().for_each(|v| {
+                    if let ValueOrPoint::Point(p) = v {
+                        stack.push(*p);
                     }
-                }
-                Value::Array(items) => {
+                }),
+                Collection::Array(items) => {
                     for v in items {
                         if let ValueOrPoint::Point(p) = v {
                             stack.push(*p);

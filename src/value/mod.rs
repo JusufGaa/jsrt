@@ -2,16 +2,29 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
-pub mod name;
-pub mod index;
+pub mod collection;
 pub mod primitive_value;
 pub mod symbol;
+pub mod value_or_point;
 pub mod context;
 
-pub use name::Name;
-pub use index::Index;
 pub use primitive_value::PrimitiveValue;
 pub use symbol::Symbol;
+
+/// 可以作为属性名（`String` / `&str` / `&'static Symbol`）。
+pub trait Name {}
+
+impl Name for String {}
+impl Name for &str {}
+impl Name for &'static Symbol {}
+
+/// 可以作为索引（`String` / `&str` / `&'static Symbol` / `usize`）。
+pub trait Index {}
+
+impl Index for String {}
+impl Index for &str {}
+impl Index for &'static Symbol {}
+impl Index for usize {}
 
 #[derive(Clone)]
 pub(crate) enum ValueWithIndex {
@@ -23,7 +36,7 @@ pub(crate) enum ValueWithIndex {
 pub(crate) enum ValueNode {
     Primitive(PrimitiveValue),
     Array(Vec<ValueWithIndex>),
-    Object(HashMap<Name, ValueWithIndex>),
+    Object(HashMap<String, ValueWithIndex>),
 }
 
 pub struct Value {
@@ -64,10 +77,10 @@ impl Value {
 
     pub fn Object(map: Map<Value>) -> Self {
         let mut nodes = Vec::new();
-        let entries = map
-            .into_iter()
-            .map(|(k, v)| (Name::String(k), merge_child(v, &mut nodes)))
-            .collect();
+        let mut entries = HashMap::new();
+        for (k, v) in map {
+            entries.insert(k, merge_child(v, &mut nodes));
+        }
         nodes.push(ValueNode::Object(entries));
         Self {
             root: ValueWithIndex::Index(nodes.len() - 1),
@@ -109,11 +122,11 @@ fn build(value: JsonValue, nodes: &mut Vec<ValueNode>) -> ValueWithIndex {
             ValueWithIndex::Index(nodes.len() - 1)
         }
         JsonValue::Object(map) => {
-            let children = map
-                .into_iter()
-                .map(|(k, v)| (Name::String(k), build(v, nodes)))
-                .collect();
-            nodes.push(ValueNode::Object(children));
+            let mut entries = HashMap::new();
+            for (k, v) in map {
+                entries.insert(k, build(v, nodes));
+            }
+            nodes.push(ValueNode::Object(entries));
             ValueWithIndex::Index(nodes.len() - 1)
         }
         _ => ValueWithIndex::Primitive(PrimitiveValue::from(value)),
@@ -149,30 +162,39 @@ impl Value {
                     if i > 0 {
                         f.write_str(",")?;
                     }
-                    match item {
-                        ValueWithIndex::Primitive(p) => p.fmt_json(f)?,
-                        ValueWithIndex::Index(child) => self.fmt_node(*child, f, path)?,
-                    }
+                    self.fmt_value(item, f, path)?;
                 }
                 f.write_str("]")
             }
             ValueNode::Object(map) => {
                 f.write_str("{")?;
-                for (i, (name, value)) in map.iter().enumerate() {
-                    if i > 0 {
+                let mut first = true;
+                for (name, value) in map {
+                    if !first {
                         f.write_str(",")?;
                     }
-                    write!(f, "{}", name)?;
+                    first = false;
+                    f.write_str(&crate::utils::format_string(name, '"'))?;
                     f.write_str(":")?;
-                    match value {
-                        ValueWithIndex::Primitive(p) => p.fmt_json(f)?,
-                        ValueWithIndex::Index(child) => self.fmt_node(*child, f, path)?,
-                    }
+                    self.fmt_value(value, f, path)?;
                 }
                 f.write_str("}")
             }
         };
         path.remove(&index);
         result
+    }
+
+    /// Formats a single element, delegating to its node when indexed.
+    fn fmt_value(
+        &self,
+        value: &ValueWithIndex,
+        f: &mut fmt::Formatter<'_>,
+        path: &mut BTreeSet<usize>,
+    ) -> fmt::Result {
+        match value {
+            ValueWithIndex::Primitive(p) => p.fmt_json(f),
+            ValueWithIndex::Index(child) => self.fmt_node(*child, f, path),
+        }
     }
 }
