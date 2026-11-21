@@ -2,14 +2,10 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
-pub mod name;
-pub mod index;
 pub mod primitive_value;
 pub mod symbol;
 pub mod context;
 
-pub use name::Name;
-pub use index::Index;
 pub use primitive_value::PrimitiveValue;
 pub use symbol::Symbol;
 
@@ -23,7 +19,7 @@ pub(crate) enum ValueWithIndex {
 pub(crate) enum ValueNode {
     Primitive(PrimitiveValue),
     Array(Vec<ValueWithIndex>),
-    Object(HashMap<Name, ValueWithIndex>),
+    Object(HashMap<String, ValueWithIndex>, HashMap<Symbol, ValueWithIndex>),
 }
 
 pub struct Value {
@@ -66,9 +62,9 @@ impl Value {
         let mut nodes = Vec::new();
         let entries = map
             .into_iter()
-            .map(|(k, v)| (Name::String(k), merge_child(v, &mut nodes)))
+            .map(|(k, v)| (k, merge_child(v, &mut nodes)))
             .collect();
-        nodes.push(ValueNode::Object(entries));
+        nodes.push(ValueNode::Object(entries, HashMap::new()));
         Self {
             root: ValueWithIndex::Index(nodes.len() - 1),
             nodes,
@@ -111,9 +107,9 @@ fn build(value: JsonValue, nodes: &mut Vec<ValueNode>) -> ValueWithIndex {
         JsonValue::Object(map) => {
             let children = map
                 .into_iter()
-                .map(|(k, v)| (Name::String(k), build(v, nodes)))
+                .map(|(k, v)| (k, build(v, nodes)))
                 .collect();
-            nodes.push(ValueNode::Object(children));
+            nodes.push(ValueNode::Object(children, HashMap::new()));
             ValueWithIndex::Index(nodes.len() - 1)
         }
         _ => ValueWithIndex::Primitive(PrimitiveValue::from(value)),
@@ -149,30 +145,47 @@ impl Value {
                     if i > 0 {
                         f.write_str(",")?;
                     }
-                    match item {
-                        ValueWithIndex::Primitive(p) => p.fmt_json(f)?,
-                        ValueWithIndex::Index(child) => self.fmt_node(*child, f, path)?,
-                    }
+                    self.fmt_child(item, f, path)?;
                 }
                 f.write_str("]")
             }
-            ValueNode::Object(map) => {
+            ValueNode::Object(strings, symbols) => {
                 f.write_str("{")?;
-                for (i, (name, value)) in map.iter().enumerate() {
-                    if i > 0 {
+                let mut first = true;
+                for (key, value) in strings.iter() {
+                    if !first {
                         f.write_str(",")?;
                     }
-                    write!(f, "{}", name)?;
+                    first = false;
+                    write!(f, "{}", crate::utils::format_string(key, '"'))?;
                     f.write_str(":")?;
-                    match value {
-                        ValueWithIndex::Primitive(p) => p.fmt_json(f)?,
-                        ValueWithIndex::Index(child) => self.fmt_node(*child, f, path)?,
+                    self.fmt_child(value, f, path)?;
+                }
+                for (key, value) in symbols.iter() {
+                    if !first {
+                        f.write_str(",")?;
                     }
+                    first = false;
+                    write!(f, "{}", key)?;
+                    f.write_str(":")?;
+                    self.fmt_child(value, f, path)?;
                 }
                 f.write_str("}")
             }
         };
         path.remove(&index);
         result
+    }
+
+    fn fmt_child(
+        &self,
+        value: &ValueWithIndex,
+        f: &mut fmt::Formatter<'_>,
+        path: &mut BTreeSet<usize>,
+    ) -> fmt::Result {
+        match value {
+            ValueWithIndex::Primitive(p) => p.fmt_json(f),
+            ValueWithIndex::Index(child) => self.fmt_node(*child, f, path),
+        }
     }
 }

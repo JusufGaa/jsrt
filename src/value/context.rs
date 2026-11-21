@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use super::name::Name;
 use super::primitive_value::PrimitiveValue;
+use super::symbol::Symbol;
 
 enum ValueOrPoint {
     Value(PrimitiveValue),
@@ -8,14 +8,54 @@ enum ValueOrPoint {
 }
 
 enum Value {
-    PriObject(HashMap<Name, PrimitiveValue>),
+    PriObject(HashMap<String, PrimitiveValue>, HashMap<Symbol, PrimitiveValue>),
     PriArray(Vec<PrimitiveValue>),
-    PtObject(HashMap<Name, usize>),
+    PtObject(HashMap<String, usize>, HashMap<Symbol, usize>),
     PtArray(Vec<usize>),
-    Object(HashMap<Name, ValueOrPoint>),
+    Object(HashMap<String, ValueOrPoint>, HashMap<Symbol, ValueOrPoint>),
     Array(Vec<ValueOrPoint>),
 }
-/// 分步式代理读取：ctx.get(index) 得到 Pending（过程态），pending.get(name) 继续解析
+
+/// 属性键：字符串名或驻留符号
+pub(crate) trait PropKey {
+    fn str_key(&self) -> Option<&str>;
+    fn sym_key(&self) -> Option<&'static Symbol>;
+}
+
+impl PropKey for String {
+    fn str_key(&self) -> Option<&str> {
+        Some(self)
+    }
+    fn sym_key(&self) -> Option<&'static Symbol> {
+        None
+    }
+}
+
+impl PropKey for &'static Symbol {
+    fn str_key(&self) -> Option<&str> {
+        None
+    }
+    fn sym_key(&self) -> Option<&'static Symbol> {
+        Some(self)
+    }
+}
+
+/// 按键类型在字符串表 / 符号表里查找
+fn lookup_key<'m, V, K: PropKey>(
+    strings: &'m HashMap<String, V>,
+    symbols: &'m HashMap<Symbol, V>,
+    key: &K,
+) -> Option<&'m V> {
+    if let Some(s) = key.str_key() {
+        return strings.get(s);
+    }
+    if let Some(s) = key.sym_key() {
+        return symbols.get(s);
+    }
+    None
+}
+
+/// 分步式代理读取：ctx.get(index) 得到 Pending（过程态），pending.get(key) 继续解析
 pub(crate) trait Get<T> {
     fn get<'a>(&'a self, key: T) -> Pending<'a>;
 }
@@ -34,8 +74,8 @@ impl Get<usize> for Context {
     }
 }
 
-impl Get<Name> for Pending<'_> {
-    fn get<'b>(&'b self, name: Name) -> Pending<'b> {
+impl<T: PropKey> Get<T> for Pending<'_> {
+    fn get<'b>(&'b self, key: T) -> Pending<'b> {
         match self {
             Pending::Process(ctx, index) => {
                 let (ctx, index) = (*ctx, *index);
@@ -49,22 +89,28 @@ impl Get<Name> for Pending<'_> {
                     path.push(cursor);
                     match ctx.heap.get(cursor) {
                         // PriObject 直接命中原始值
-                        Some(Value::PriObject(map)) => break map.get(&name),
+                        Some(Value::PriObject(strings, symbols)) => {
+                            break lookup_key(strings, symbols, &key)
+                        }
                         // 数组没有命名属性，槽位不存在同样视为读不到
                         None | Some(Value::PriArray(_) | Value::PtArray(_) | Value::Array(_)) => {
                             break None
                         }
                         // PtObject：属性是指针，前进到目标槽位继续读
-                        Some(Value::PtObject(map)) => match map.get(&name) {
-                            Some(&next) => cursor = next,
-                            None => break None,
-                        },
+                        Some(Value::PtObject(strings, symbols)) => {
+                            match lookup_key(strings, symbols, &key) {
+                                Some(&next) => cursor = next,
+                                None => break None,
+                            }
+                        }
                         // Object：属性是原始值则命中，是指针则前进继续读
-                        Some(Value::Object(map)) => match map.get(&name) {
-                            Some(ValueOrPoint::Value(p)) => break Some(p),
-                            Some(ValueOrPoint::Point(i)) => cursor = *i,
-                            None => break None,
-                        },
+                        Some(Value::Object(strings, symbols)) => {
+                            match lookup_key(strings, symbols, &key) {
+                                Some(ValueOrPoint::Value(p)) => break Some(p),
+                                Some(ValueOrPoint::Point(i)) => cursor = *i,
+                                None => break None,
+                            }
+                        }
                     }
                 };
                 match found {
@@ -232,13 +278,18 @@ impl Context {
             }
             match &mut self.heap[i] {
                 // PriObject/PriArray 只含原始值，无指针
-                Value::PriObject(_) | Value::PriArray(_) => {}
-                Value::PtObject(map) => map.values_mut().for_each(&mut update),
+                Value::PriObject(..) | Value::PriArray(_) => {}
+                Value::PtObject(strings, symbols) => {
+                    strings.values_mut().for_each(&mut update);
+                    symbols.values_mut().for_each(&mut update);
+                }
                 Value::PtArray(items) => items.iter_mut().for_each(&mut update),
-                Value::Object(map) => {
-                    for v in map.values_mut() {
-                        if let ValueOrPoint::Point(p) = v {
-                            update(p);
+                Value::Object(strings, symbols) => {
+                    for map in [strings, symbols] {
+                        for v in map.values_mut() {
+                            if let ValueOrPoint::Point(p) = v {
+                                update(p);
+                            }
                         }
                     }
                 }
@@ -280,13 +331,18 @@ impl Context {
             marked[i] = true;
             match &self.heap[i] {
                 // PriObject/PriArray 只含原始值，无子引用
-                Value::PriObject(_) | Value::PriArray(_) => {}
-                Value::PtObject(map) => stack.extend(map.values().copied()),
+                Value::PriObject(..) | Value::PriArray(_) => {}
+                Value::PtObject(strings, symbols) => {
+                    stack.extend(strings.values().copied());
+                    stack.extend(symbols.values().copied());
+                }
                 Value::PtArray(items) => stack.extend(items.iter().copied()),
-                Value::Object(map) => {
-                    for v in map.values() {
-                        if let ValueOrPoint::Point(p) = v {
-                            stack.push(*p);
+                Value::Object(strings, symbols) => {
+                    for map in [strings, symbols] {
+                        for v in map.values() {
+                            if let ValueOrPoint::Point(p) = v {
+                                stack.push(*p);
+                            }
                         }
                     }
                 }

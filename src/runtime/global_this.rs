@@ -1,9 +1,9 @@
-use crate::value::{Name, Value};
+use crate::value::Value;
 
 pub(crate) enum NodeOperation {
-    Insert(Name, Value),
-    Delete(Name),
-    Update(Name, Value),
+    Insert(String, Value),
+    Delete(String),
+    Update(String, Value),
 }
 
 pub struct GlobalThisLogPage {
@@ -13,7 +13,7 @@ pub struct GlobalThisLogPage {
 
 pub struct GlobalThis {
     root: GlobalThisLogPage,
-    public_names: Vec<Name>,
+    public_names: Vec<String>,
 }
 
 impl GlobalThisLogPage {
@@ -28,15 +28,15 @@ impl GlobalThisLogPage {
         self.operations.push(operation);
     }
 
-    pub fn insert(&mut self, name: Name, value: Value) {
+    pub fn insert(&mut self, name: String, value: Value) {
         self.push_operation(NodeOperation::Insert(name, value));
     }
 
-    pub fn delete(&mut self, name: Name) {
+    pub fn delete(&mut self, name: String) {
         self.push_operation(NodeOperation::Delete(name));
     }
 
-    pub fn update(&mut self, name: Name, value: Value) {
+    pub fn update(&mut self, name: String, value: Value) {
         self.push_operation(NodeOperation::Update(name, value));
     }
 }
