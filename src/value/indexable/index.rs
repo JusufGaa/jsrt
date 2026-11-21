@@ -1,6 +1,7 @@
 use std::fmt;
 
-use super::symbol::Symbol;
+use super::name::Name;
+use crate::value::symbol::Symbol;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Index {
@@ -15,6 +16,15 @@ impl fmt::Display for Index {
             Index::String(s) => f.write_str(&crate::utils::format_string(s, '"')),
             Index::Symbol(s) => write!(f, "{}", s),
             Index::Index(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+impl From<Name> for Index {
+    fn from(name: Name) -> Index {
+        match name {
+            Name::String(s) => Index::String(s),
+            Name::Symbol(s) => Index::Symbol(s),
         }
     }
 }

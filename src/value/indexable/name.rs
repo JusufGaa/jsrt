@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::symbol::Symbol;
+use crate::value::symbol::Symbol;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Name {
