@@ -11,7 +11,7 @@ pub enum Name {
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Name::String(s) => f.write_str(&super::primitive_value::format_string(s, Some('"'))),
+            Name::String(s) => f.write_str(&crate::utils::format_string(s, '"')),
             Name::Symbol(s) => write!(f, "{}", s),
         }
     }

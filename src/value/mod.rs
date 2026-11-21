@@ -3,11 +3,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 pub mod name;
+pub mod index;
 pub mod primitive_value;
 pub mod symbol;
 pub mod context;
 
 pub use name::Name;
+pub use index::Index;
 pub use primitive_value::PrimitiveValue;
 pub use symbol::Symbol;
 
