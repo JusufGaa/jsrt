@@ -8,8 +8,8 @@ use serde_json::{
     Number as JsonNumber,
     Value as JsonValue,
 };
-use std::collections::HashSet;
-use crate::runtime::value;
+use std::collections::{HashMap, HashSet};
+use crate::js_value::{JsObject, JsValue};
 
 pub struct V8Worker {
     file_name: Option<String>,
@@ -51,7 +51,7 @@ impl V8Worker {
         }
     }
 
-    fn eval_with_origin(&mut self, code: &str, origin: impl Into<Option<V8ScriptOrigin>>) -> Option<value::Value> {
+    fn eval_with_origin(&mut self, code: &str, origin: impl Into<Option<V8ScriptOrigin>>) -> Option<JsValue> {
         let isolate = &mut self.isolate;
         let context = &self.context;
 
@@ -148,10 +148,10 @@ impl super::Worker for V8Worker {
         self.cached_code.push(code.as_ref().to_string());
     }
 
-    fn run(&mut self) -> value::Value {
+    fn run(&mut self) -> JsValue {
         let code = std::mem::take(&mut self.cached_code).join("\n");
         if code.is_empty() {
-            return value::Value::Primitive(value::PrimitiveValue::Null);
+            return JsValue::NULL;
         }
         self.eval_with_origin(&code, V8ScriptOrigin {
             resource_line_offset: 0,
@@ -161,14 +161,14 @@ impl super::Worker for V8Worker {
             resource_is_opaque: true,
             is_wasm: false,
             is_module: false,
-        }).unwrap_or(value::Value::Primitive(value::PrimitiveValue::Null))
+        }).unwrap_or(JsValue::NULL)
     }
 
-    fn import(&mut self, module_name: impl AsRef<Path>) -> value::Value {
+    fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue {
         let path = self.resolve_module_path(module_name.as_ref());
         let code = match std::fs::read_to_string(&path) {
             Ok(code) => code,
-            Err(_) => return value::Value::Primitive(value::PrimitiveValue::Null),
+            Err(_) => return JsValue::NULL,
         };
 
         let prev_file_name = self.file_name.take();
@@ -184,7 +184,7 @@ impl super::Worker for V8Worker {
         });
         self.file_name = prev_file_name;
 
-        result.unwrap_or(value::Value::Primitive(value::PrimitiveValue::Null))
+        result.unwrap_or(JsValue::NULL)
     }
 }
 
@@ -218,64 +218,67 @@ fn v8_value_to_json(
 fn v8_value_to_value(
     scope: &PinScope<'_, '_>,
     value: Local<'_, V8Value>,
-) -> value::Value {
+) -> JsValue {
     let mut visited = HashSet::new();
     v8_value_to_value_impl(scope, value, &mut visited)
 }
 
+/// Convert an immediate (non-object) V8 value into a [`JsValue`].
 fn v8_value_to_primitive_value(
     scope: &PinScope<'_, '_>,
     value: Local<'_, V8Value>,
-) -> value::PrimitiveValue {
+) -> JsValue {
     if value.is_undefined() {
-        return value::PrimitiveValue::Undefined;
+        return JsValue::UNDEFINED;
     }
     if value.is_null() {
-        return value::PrimitiveValue::Null;
+        return JsValue::NULL;
     }
     if value.is_boolean() {
         let b = value.boolean_value(scope);
-        return value::PrimitiveValue::Boolean(b);
+        return JsValue::from_bool(b);
     }
     if value.is_number() {
         let n = value.number_value(scope).unwrap_or(0.0);
-        return value::PrimitiveValue::Number(
-            JsonNumber::from_f64(n).unwrap()
-        );
+        // Normalize integral numbers to the Int tag, like QuickJS does.
+        if n.is_finite() && n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
+            return JsValue::from_i32(n as i32);
+        }
+        return JsValue::from_f64(n);
     }
     if value.is_big_int() {
         let bi = value.to_big_int(scope).unwrap();
         let s = bi.to_string(scope).unwrap();
         let s = s.to_rust_string_lossy(scope);
         let parsed: num_bigint::BigInt = s.parse().unwrap_or_default();
-        return value::PrimitiveValue::Bigint(parsed);
+        return JsValue::from_bigint(parsed);
     }
     if value.is_string() {
         let s = value.to_string(scope).unwrap();
         let s = s.to_rust_string_lossy(scope);
-        return value::PrimitiveValue::String(s);
+        return JsValue::from_string(s);
     }
-    
-    value::PrimitiveValue::Undefined
+
+    JsValue::UNDEFINED
 }
 
 
 fn v8_value_to_value_impl(
     scope: &PinScope<'_, '_>,
     value: Local<'_, V8Value>,
-    visited: &mut HashSet<usize>, // 用对象身份（指针）判重
-) -> value::Value {
+    visited: &mut HashSet<usize>, // dedup by object identity (pointer hash)
+) -> JsValue {
     if value.is_object() {
         let obj = value.to_object(scope).unwrap();
         let identity = obj.get_identity_hash().get() as usize;
 
-        // 循环引用：用 null 兜底（或你想要的哨兵值）
+        // Cyclic reference: fall back to null.
         if visited.contains(&identity) {
-            return value::Value::Primitive(value::PrimitiveValue::Null);
+            return JsValue::NULL;
         }
         visited.insert(identity);
 
-        // 数组
+        // Arrays
         if value.is_array() {
             let arr: Local<'_, Array> = value.try_into().unwrap();
             let len = arr.length() as usize;
@@ -285,11 +288,11 @@ fn v8_value_to_value_impl(
                 vec.push(v8_value_to_value_impl(scope, elem, visited));
             }
             visited.remove(&identity);
-            return value::Value::Array(vec);
+            return JsValue::from_array(vec);
         }
 
-        // 普通对象
-        let mut map = value::Map::<value::Value>::new();
+        // Ordinary objects
+        let mut props = HashMap::<String, JsValue>::new();
         let own_keys = obj
             .get_own_property_names(
                 scope,
@@ -305,15 +308,19 @@ fn v8_value_to_value_impl(
             if let Some(key_str) = key.to_string(scope) {
                 let key_rust = key_str.to_rust_string_lossy(scope);
                 let val = obj.get(scope, key).unwrap();
-                map.insert(
+                props.insert(
                     key_rust,
                     v8_value_to_value_impl(scope, val, visited),
                 );
             }
         }
         visited.remove(&identity);
-        value::Value::Object(map)
+        JsValue::from_object(JsObject {
+            is_array: false,
+            elements: Vec::new(),
+            props,
+        })
     } else {
-        value::Value::Primitive(v8_value_to_primitive_value(scope, value))   
+        v8_value_to_primitive_value(scope, value)
     }
 }

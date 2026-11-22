@@ -1,15 +1,17 @@
-pub use crate::value;
+pub use crate::js_value;
 pub mod global_this;
 
 use std::path::Path;
+
+use crate::js_value::JsValue;
 
 pub trait Worker {
     fn save(&mut self);
     fn restore(&mut self);
     fn load(&mut self, code: impl AsRef<str>);
-    fn run(&mut self) -> value::Value;
-    fn import(&mut self, module_name: impl AsRef<Path>) -> value::Value;
-    fn eval(&mut self, code: impl AsRef<str>) -> value::Value {
+    fn run(&mut self) -> JsValue;
+    fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue;
+    fn eval(&mut self, code: impl AsRef<str>) -> JsValue {
         self.load(code);
         self.run()
     }
@@ -28,10 +30,10 @@ macro_rules! init {
             v8::V8::initialize();
         }
     }
-} 
+}
 
 #[macro_export]
-macro_rules! worker { 
+macro_rules! worker {
     () => {{
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {

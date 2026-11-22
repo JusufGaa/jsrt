@@ -1,9 +1,9 @@
-use crate::value::Value;
+use crate::js_value::JsValue;
 
 pub(crate) enum NodeOperation {
-    Insert(String, Value),
+    Insert(String, JsValue),
     Delete(String),
-    Update(String, Value),
+    Update(String, JsValue),
 }
 
 pub struct GlobalThisLogPage {
@@ -28,7 +28,7 @@ impl GlobalThisLogPage {
         self.operations.push(operation);
     }
 
-    pub fn insert(&mut self, name: String, value: Value) {
+    pub fn insert(&mut self, name: String, value: JsValue) {
         self.push_operation(NodeOperation::Insert(name, value));
     }
 
@@ -36,7 +36,7 @@ impl GlobalThisLogPage {
         self.push_operation(NodeOperation::Delete(name));
     }
 
-    pub fn update(&mut self, name: String, value: Value) {
+    pub fn update(&mut self, name: String, value: JsValue) {
         self.push_operation(NodeOperation::Update(name, value));
     }
 }
