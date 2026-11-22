@@ -9,15 +9,17 @@ use super::tag::JsTag;
 /// Untagged payload of a [`JsValue`].
 ///
 /// Which field is active is determined by the `tag` of the enclosing value.
+/// Module-private on purpose: reading the wrong union member is UB, so
+/// all access must go through `JsValue`'s checked accessors.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub union JsValuePayload {
-    pub int32: i32,
-    pub uint32: u32,
-    pub float64: f64,
+union JsValuePayload {
+    int32: i32,
+    uint32: u32,
+    float64: f64,
     /// Refcounted heap cell (`RefCount<String>`, `RefCount<BigInt>`,
     /// `RefCount<JsObject>`), selected by a negative tag.
-    pub ptr: *mut (),
+    ptr: *mut (),
 }
 
 /// A JavaScript value: 16-byte tagged union, mirroring QuickJS `JSValue`.
@@ -28,8 +30,8 @@ pub union JsValuePayload {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct JsValue {
-    pub u: JsValuePayload,
-    pub tag: i64,
+    u: JsValuePayload,
+    tag: i64,
 }
 
 impl JsValue {
@@ -107,7 +109,7 @@ impl JsValue {
     pub fn from_object(obj: JsObject) -> Self {
         JsValue {
             u: JsValuePayload {
-                ptr: obj.into_cell() as *mut (),
+                ptr: obj.into_cell(),
             },
             tag: JsTag::Object as i64,
         }
@@ -123,7 +125,7 @@ impl JsValue {
     /// # Safety
     /// The stored tag must always come from `JsTag as i64`.
     #[inline]
-    pub fn tag(&self) -> JsTag {
+    pub(crate) fn tag(&self) -> JsTag {
         unsafe { std::mem::transmute(self.tag) }
     }
 
@@ -233,7 +235,7 @@ impl JsValue {
     /// The caller must ensure no aliasing borrow of the same object.
     pub unsafe fn as_object_mut(&self) -> Option<&mut JsObject> {
         if self.tag == JsTag::Object as i64 {
-            Some(RefCount::<JsObject>::data_mut(self.u.ptr as *mut _))
+            Some(unsafe { RefCount::<JsObject>::data_mut(self.u.ptr as *mut _) })
         } else {
             None
         }

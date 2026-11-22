@@ -33,10 +33,10 @@ impl JsObject {
         }
     }
 
-    /// Box into a refcounted heap cell (`RefCount<Self>`) ready to be
-    /// stored in a [`JsValue`](super::JsValue).
-    pub fn into_cell(self) -> *mut RefCount<Self> {
-        RefCount::new(self)
+    /// Box into a refcounted heap cell ready to be stored in a
+    /// [`JsValue`](super::value::JsValue).
+    pub fn into_cell(self) -> *mut () {
+        RefCount::new(self) as *mut _
     }
 }
 
