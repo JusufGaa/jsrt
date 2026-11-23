@@ -4,15 +4,19 @@ pub mod global_this;
 use std::path::Path;
 
 use crate::js_value::JsValue;
+use crate::preprocessor::Compiled;
 
 pub trait Worker {
     fn save(&mut self);
     fn restore(&mut self);
-    fn load(&mut self, code: impl AsRef<str>);
+    fn compile(&mut self, code: impl AsRef<str>);
     fn run(&mut self) -> JsValue;
     fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue;
+    fn load_compiled(&mut self, code: impl Compiled) {
+        code.load(self);
+    }
     fn eval(&mut self, code: impl AsRef<str>) -> JsValue {
-        self.load(code);
+        self.compile(code);
         self.run()
     }
 }

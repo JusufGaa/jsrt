@@ -141,7 +141,7 @@ impl super::Worker for V8Worker {
         }
     }
 
-    fn load(&mut self, code: impl AsRef<str>) {
+    fn compile(&mut self, code: impl AsRef<str>) {
         self.cached_code.push(code.as_ref().to_string());
     }
 
