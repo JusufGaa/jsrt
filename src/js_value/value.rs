@@ -295,9 +295,9 @@ impl fmt::Display for JsValue {
             JsTag::String => f.write_str(self.as_string().unwrap_or("")),
             JsTag::BigInt => write!(f, "{}", self.as_bigint().map_or_else(String::new, |b| b.to_string())),
             JsTag::Object => match self.as_object() {
-                Some(obj) if obj.is_array => {
+                Some(obj) if obj.is_array() => {
                     f.write_str("[")?;
-                    for (i, item) in obj.elements.iter().enumerate() {
+                    for (i, item) in obj.elements().iter().enumerate() {
                         if i > 0 {
                             f.write_str(",")?;
                         }
@@ -326,8 +326,8 @@ impl fmt::Debug for JsValue {
                 crate::utils::format_string(self.as_string().unwrap_or(""), '"')
             ),
             JsTag::Object => match self.as_object() {
-                Some(obj) if obj.is_array => {
-                    f.debug_list().entries(obj.elements.iter()).finish()
+                Some(obj) if obj.is_array() => {
+                    f.debug_list().entries(obj.elements().iter()).finish()
                 }
                 _ => f.write_str(&self.to_string()),
             },
@@ -342,7 +342,7 @@ impl fmt::Debug for JsValue {
 impl From<HashMap<String, JsValue>> for JsValue {
     fn from(props: HashMap<String, JsValue>) -> Self {
         let mut obj = JsObject::new();
-        obj.props = props;
+        obj.set_props(props);
         JsValue::from_object(obj)
     }
 }

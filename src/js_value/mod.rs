@@ -6,9 +6,10 @@
 //! payload is selected by a negative tag.
 
 mod tag;
+mod builtin;
 mod object;
 mod rc;
 pub mod value;
 
-pub use object::JsObject;
+pub use object::*;
 pub use value::JsValue;

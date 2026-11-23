@@ -7,19 +7,16 @@ pub(crate) enum NodeOperation {
 }
 
 pub struct GlobalThisLogPage {
-    parent: Option<Box<Self>>,
     operations: Vec<NodeOperation>,
 }
 
 pub struct GlobalThis {
-    root: GlobalThisLogPage,
-    public_names: Vec<String>,
+    pages: Vec<GlobalThisLogPage>,
 }
 
 impl GlobalThisLogPage {
     pub fn new() -> Self {
         Self {
-            parent: None,
             operations: Vec::new(),
         }
     }
@@ -44,43 +41,18 @@ impl GlobalThisLogPage {
 impl GlobalThis {
     pub fn new() -> Self {
         Self {
-            root: GlobalThisLogPage::new(),
-            public_names: Vec::new(),
+            pages: vec![],
         }
     }
 
-    pub fn push(&mut self, new_value: GlobalThisLogPage) {
-        let old = std::mem::replace(&mut self.root, new_value);
-        self.root.parent = Some(Box::new(old));
-        for op in &self.root.operations {
-            match op {
-                NodeOperation::Insert(name, _) | NodeOperation::Update(name, _) => {
-                    if !self.public_names.contains(name) {
-                        self.public_names.push(name.clone());
-                    }
-                }
-                NodeOperation::Delete(name) => {
-                    self.public_names.retain(|n| n != name);
-                }
-            }
-        }
+    pub fn push(&mut self, new_page: GlobalThisLogPage) {
+        self.pages.push(new_page);
     }
 
     pub fn pop(&mut self) -> Option<GlobalThisLogPage> {
-        let parent = self.root.parent.take()?;
-        let popped = std::mem::replace(&mut self.root, *parent);
-        for op in popped.operations.iter().rev() {
-            match op {
-                NodeOperation::Insert(name, _) | NodeOperation::Update(name, _) => {
-                    self.public_names.retain(|n| n != name);
-                }
-                NodeOperation::Delete(name) => {
-                    if !self.public_names.contains(name) {
-                        self.public_names.push(name.clone());
-                    }
-                }
-            }
+        if self.pages.len() <= 1 {
+            return None;
         }
-        Some(popped)
+        self.pages.pop()
     }
 }

@@ -315,11 +315,9 @@ fn v8_value_to_value_impl(
             }
         }
         visited.remove(&identity);
-        JsValue::from_object(JsObject {
-            is_array: false,
-            elements: Vec::new(),
-            props,
-        })
+        let mut object = JsObject::new();
+        object.set_props(props);
+        JsValue::from_object(object)
     } else {
         v8_value_to_primitive_value(scope, value)
     }
