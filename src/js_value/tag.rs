@@ -6,9 +6,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsTag {
     // -- negative (refcounted) tags --
-    /// Lower bound of all refcounted tags (`JS_TAG_FIRST`).
-    First            = -11,
-    BigDecimal       = -11, // JS_TAG_BIG_DECIMAL
+    // `JS_TAG_FIRST` == `JS_TAG_BIG_DECIMAL` == -11 in QuickJS; use
+    // `JsTag::BigDecimal` (or the constant below) as the lower bound.
+    BigDecimal       = -11, // JS_TAG_BIG_DECIMAL / JS_TAG_FIRST
     BigInt           = -10, // JS_TAG_BIG_INT
     BigFloat         = -9,  // JS_TAG_BIG_FLOAT
     Symbol           = -8,  // JS_TAG_SYMBOL

@@ -25,8 +25,10 @@ impl<T> RefCount<T> {
     /// `ptr` must have been returned by [`RefCount::new`] and the caller
     /// must own one reference.
     pub unsafe fn inc(ptr: *mut Self) {
-        let rc = &*ptr;
-        rc.refcount.set(rc.refcount.get() + 1);
+        unsafe {
+            let rc = &*ptr;
+            rc.refcount.set(rc.refcount.get() + 1);
+        }
     }
 
     /// Release one reference, freeing the cell when it reaches zero
@@ -36,24 +38,26 @@ impl<T> RefCount<T> {
     /// `ptr` must have been returned by [`RefCount::new`] and the caller
     /// must own one reference.
     pub unsafe fn dec(ptr: *mut Self) {
-        let rc = &*ptr;
-        let remaining = rc.refcount.get() - 1;
-        rc.refcount.set(remaining);
-        if remaining == 0 {
-            drop(Box::from_raw(ptr));
+        unsafe {
+            let rc = &*ptr;
+            let remaining = rc.refcount.get() - 1;
+            rc.refcount.set(remaining);
+            if remaining == 0 {
+                drop(Box::from_raw(ptr));
+            }
         }
     }
 
     /// # Safety
     /// `ptr` must be a valid, live cell pointer.
-    pub unsafe fn data(ptr: *mut Self) -> &T {
-        &(*ptr).data
+    pub unsafe fn data(ptr: *mut Self) -> &'static T {
+        unsafe { &(*ptr).data }
     }
 
     /// # Safety
     /// `ptr` must be a valid, live cell pointer, and no other reference
     /// may be used while the returned borrow is alive.
-    pub unsafe fn data_mut(ptr: *mut Self) -> &mut T {
-        &mut (*ptr).data
+    pub unsafe fn data_mut(ptr: *mut Self) -> &'static mut T {
+        unsafe { &mut (*ptr).data }
     }
 }

@@ -4,10 +4,7 @@ use v8::{
     Local, Value as V8Value, Array, GetPropertyNamesArgs,
     KeyCollectionMode,
 };
-use serde_json::{
-    Number as JsonNumber,
-    Value as JsonValue,
-};
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use crate::js_value::{JsObject, JsValue};
 
