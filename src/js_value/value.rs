@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::fmt;
 use num_bigint::BigInt;
 
+use super::atom::JsAtom;
 use super::object::JsObject;
 use super::rc::RefCount;
+use super::symbol::JsSymbol;
 use super::tag::JsTag;
 
 /// Untagged payload of a [`JsValue`].
@@ -105,6 +107,18 @@ impl JsValue {
         }
     }
 
+    /// Store an interned symbol (`&'static JsSymbol`). Symbols are
+    /// immortal, so unlike strings/bigints/objects no refcounting is
+    /// involved (see `symbol.rs`).
+    pub fn from_symbol(sym: &'static JsSymbol) -> Self {
+        JsValue {
+            u: JsValuePayload {
+                ptr: sym as *const JsSymbol as *mut (),
+            },
+            tag: JsTag::Symbol as i64,
+        }
+    }
+
     /// Box `obj` into a refcounted heap cell (`RefCount<JsObject>`).
     pub fn from_object(obj: JsObject) -> Self {
         JsValue {
@@ -158,6 +172,10 @@ impl JsValue {
 
     pub fn is_bigint(&self) -> bool {
         self.tag == JsTag::BigInt as i64
+    }
+
+    pub fn is_symbol(&self) -> bool {
+        self.tag == JsTag::Symbol as i64
     }
 
     pub fn is_object(&self) -> bool {
@@ -216,6 +234,16 @@ impl JsValue {
     pub fn as_bigint(&self) -> Option<&BigInt> {
         if self.tag == JsTag::BigInt as i64 {
             Some(unsafe { RefCount::<BigInt>::data(self.u.ptr as *mut _) })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_symbol(&self) -> Option<&'static JsSymbol> {
+        if self.tag == JsTag::Symbol as i64 {
+            // Symbols are leaked/interned for the program lifetime, so
+            // the deref stays valid forever.
+            Some(unsafe { &*(self.u.ptr as *const JsSymbol) })
         } else {
             None
         }
@@ -294,6 +322,12 @@ impl fmt::Display for JsValue {
             }
             JsTag::String => f.write_str(self.as_string().unwrap_or("")),
             JsTag::BigInt => write!(f, "{}", self.as_bigint().map_or_else(String::new, |b| b.to_string())),
+            // Matches `String(sym)`; note that *implicit* conversion of a
+            // symbol (e.g. `"" + sym`) must throw TypeError instead.
+            JsTag::Symbol => match self.as_symbol().and_then(JsSymbol::description) {
+                Some(desc) => write!(f, "Symbol({})", desc),
+                None => f.write_str("Symbol()"),
+            },
             JsTag::Object => match self.as_object() {
                 Some(obj) if obj.is_array() => {
                     f.write_str("[")?;
@@ -331,18 +365,31 @@ impl fmt::Debug for JsValue {
                 }
                 _ => f.write_str(&self.to_string()),
             },
-            JsTag::Symbol => f.write_str("Symbol()"),
+            JsTag::Symbol => write!(
+                f,
+                "Symbol({})",
+                self.as_symbol()
+                    .and_then(JsSymbol::description)
+                    .map(|d| crate::utils::format_string(d, '"'))
+                    .unwrap_or_default()
+            ),
             _ => fmt::Display::fmt(self, f),
         }
     }
 }
 
 /// Convenience constructor mirroring the old JSON-tree API: build an
-/// object directly from string-keyed properties.
+/// object directly from string-keyed properties (keys get interned as
+/// string atoms).
 impl From<HashMap<String, JsValue>> for JsValue {
     fn from(props: HashMap<String, JsValue>) -> Self {
         let mut obj = JsObject::new();
-        obj.set_props(props);
+        obj.set_props(
+            props
+                .into_iter()
+                .map(|(k, v)| (JsAtom::from_str(&k), v))
+                .collect(),
+        );
         JsValue::from_object(obj)
     }
 }

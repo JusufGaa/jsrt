@@ -4,16 +4,22 @@ use v8::{
     Local, Value as V8Value, Array, GetPropertyNamesArgs,
     KeyCollectionMode,
 };
-use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
-use crate::js_value::{JsObject, JsValue};
+use crate::js_value::{JsAtom, JsObject, JsValue};
+
+use super::global_this::{
+    GlobalThis, GlobalThisSnapshot, js_value_to_source, operation_statements,
+};
 
 pub struct V8Worker {
     file_name: Option<String>,
     cached_code: Vec<String>,
     isolate: OwnedIsolate,
     context: Global<Context>,
-    snapshots: Vec<JsonValue>,
+    /// History of snapshots (one per `save`).
+    snapshots: Vec<GlobalThisSnapshot>,
+    /// Tracked current state of `globalThis`.
+    global_this: GlobalThis,
 }
 
 pub struct V8ScriptOrigin {
@@ -26,18 +32,24 @@ pub struct V8ScriptOrigin {
     is_module: bool,
 }
 
+impl Default for V8ScriptOrigin {
+    fn default() -> Self {
+        Self {
+            resource_line_offset: 0,
+            resource_column_offset: 0,
+            resource_is_shared_cross_origin: false,
+            script_id: -1,
+            resource_is_opaque: true,
+            is_wasm: false,
+            is_module: false,
+        }
+    }
+}
+
 impl V8Worker {
     pub fn new() -> Self {
         let mut isolate = v8::Isolate::new(Default::default());
-    
-        let context = {
-            let mut pinned =
-                std::pin::pin!(v8::HandleScope::<Context>::new(&mut isolate));
-            let scope = pinned.as_mut().init();
-
-            let ctx = v8::Context::new(&scope, Default::default());
-            Global::new(&scope, ctx)
-        };
+        let context = Self::new_context(&mut isolate);
 
         V8Worker {
             file_name: None,
@@ -45,99 +57,131 @@ impl V8Worker {
             isolate,
             context,
             snapshots: Vec::new(),
+            global_this: GlobalThis::new(),
         }
     }
 
+    /// Create a brand new `Context` inside a fresh `HandleScope`.
+    fn new_context(isolate: &mut OwnedIsolate) -> Global<Context> {
+        v8::scope!(let scope, isolate);
+        let ctx = v8::Context::new(scope, Default::default());
+        Global::new(scope, ctx)
+    }
+
+    /// Enter the isolate with the worker's current context and run `f`.
+    ///
+    /// A scope must stay pinned on the stack and borrows its parent, so it
+    /// cannot be returned from a method directly; a closure is used instead.
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(&mut PinScope<'_, '_>, Local<'_, Context>) -> R,
+    ) -> R {
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let ctx = Local::new(scope, &self.context);
+        f(scope, ctx)
+    }
+
     fn eval_with_origin(&mut self, code: &str, origin: impl Into<Option<V8ScriptOrigin>>) -> Option<JsValue> {
-        let isolate = &mut self.isolate;
-        let context = &self.context;
+        let file_name = self.file_name.clone();
 
-        let mut pinned =
-                std::pin::pin!(v8::HandleScope::new(isolate));
-        let mut scope = pinned.as_mut().init();
+        self.with_scope(|scope, _| {
+            // Capture exceptions in a TryCatch so they are swallowed silently
+            // instead of being reported as uncaught errors by V8.
+            v8::tc_scope!(let tc, scope);
 
-        let ctx = Global::<Context>::new(&scope, context);
-        let ctx = Local::new(&scope, ctx);
-
-        let mut ctx_scope = v8::ContextScope::new(&mut scope, ctx);
-        let mut pinned2 = std::pin::pin!(v8::HandleScope::new(&mut ctx_scope));
-        let scope2 = pinned2.as_mut().init();
-        let resource_name = if let Some(ref file_name) = self.file_name {
-            v8::String::new(&scope2, &*file_name)
-        } else {
-            v8::String::new(&scope2, "repl")
-        };
-        match resource_name {
-            None => return  None,
-            _ => {}
-        }
-        if let Some(code) = v8::String::new(&scope2, code) {
-            if let Some(script) = match origin.into() {
-                Some(origin) => {
-                    let origin = v8::ScriptOrigin::new(&scope2,
-                        resource_name.unwrap().into(), 
-                        origin.resource_line_offset, 
-                        origin.resource_column_offset, 
-                        origin.resource_is_shared_cross_origin, 
-                        origin.script_id, 
-                        None, 
-                        origin.resource_is_opaque, 
-                        origin.is_wasm, 
-                        origin.is_module, 
-                        None);
-                    v8::Script::compile(&scope2, code, Some(&origin))
-                },
-                _ => v8::Script::compile(&scope2, code, None)
-            } {
-                if let Some(result) = script.run(&scope2) {
-                    return Some(v8_value_to_value(&scope2, result.into()))
+            let resource_name =
+                v8::String::new(&tc, file_name.as_deref().unwrap_or("repl"));
+            let Some(resource_name) = resource_name else {
+                return None;
+            };
+            if let Some(code) = v8::String::new(&tc, code) {
+                if let Some(script) = match origin.into() {
+                    Some(origin) => {
+                        let origin = v8::ScriptOrigin::new(&tc,
+                            resource_name.into(),
+                            origin.resource_line_offset,
+                            origin.resource_column_offset,
+                            origin.resource_is_shared_cross_origin,
+                            origin.script_id,
+                            None,
+                            origin.resource_is_opaque,
+                            origin.is_wasm,
+                            origin.is_module,
+                            None);
+                        v8::Script::compile(&tc, code, Some(&origin))
+                    },
+                    _ => v8::Script::compile(&tc, code, None)
+                } {
+                    if let Some(result) = script.run(&tc) {
+                        return Some(v8_value_to_value(&tc, result.into()))
+                    }
                 }
             }
-        }
-        None
+            None
+        })
     }
 }
 
 impl super::Worker for V8Worker {
     fn save(&mut self) {
-        let isolate = &mut self.isolate;
-        let context = &self.context;
+        let global_value = self.with_scope(|scope, ctx| {
+            let global = ctx.global(scope);
+            v8_value_to_value(scope, global.into())
+        });
 
-        let mut pinned =
-            std::pin::pin!(v8::HandleScope::new(isolate));
-        let mut scope = pinned.as_mut().init();
+        // Current `globalThis` state: variable name -> value.
+        let mut current = HashMap::<String, JsValue>::new();
+        if let Some(obj) = global_value.as_object() {
+            for (key, value) in obj.props() {
+                if let Some(name) = key.as_str() {
+                    current.insert(name.to_string(), *value);
+                }
+            }
+        }
 
-        let ctx = Local::new(&scope, context);
-        let mut ctx_scope = v8::ContextScope::new(&mut scope, ctx);
-        let mut pinned2 = std::pin::pin!(v8::HandleScope::new(&mut ctx_scope));
-        let scope2 = pinned2.as_mut().init();
+        // Diff against the tracked state to build a snapshot of operations.
+        let mut snapshot = GlobalThisSnapshot::new();
+        for (name, value) in &current {
+            match self.global_this.get(name) {
+                None => snapshot.insert(name.clone(), *value),
+                Some(old) if js_value_to_source(old) != js_value_to_source(value) => {
+                    snapshot.update(name.clone(), *value)
+                }
+                _ => {}
+            }
+        }
+        for (name, _) in self.global_this.iter() {
+            if !current.contains_key(name) {
+                snapshot.delete(name.clone());
+            }
+        }
 
-        let global = ctx.global(&scope2);
-        let snapshot = v8_value_to_json(&scope2, global.into());
-
+        let mut tracked = GlobalThis::new();
+        for (name, value) in current {
+            tracked.insert(name, value);
+        }
+        self.global_this = tracked;
         self.snapshots.push(snapshot);
     }
 
     fn restore(&mut self) {
-        let context = {
-            let isolate = &mut self.isolate;
-            let mut pinned =
-                std::pin::pin!(v8::HandleScope::<Context>::new(isolate));
-            let scope = pinned.as_mut().init();
-
-            let ctx = v8::Context::new(&scope, Default::default());
-            Global::new(&scope, ctx)
-        };
-        self.context = context;
+        self.context = Self::new_context(&mut self.isolate);
 
         let t = self.snapshots.pop();
-        if let Some(snap) = t {
-            let code = snap.as_object().unwrap().iter().map(|(key, value)| {
-                let key = serde_json::to_string(key).unwrap();
-                format!("globalThis[{}] = {};", key, value)
-            }).reduce(|a, b| format!("{}\n{}", a, b)).unwrap();
+        if let Some(popped) = t {
+            // Snapshots are deltas, so replay every snapshot in order,
+            // ending with the popped one, to rebuild the state of its
+            // save point.
+            let mut statements = Vec::new();
+            for snapshot in &self.snapshots {
+                statements.extend(operation_statements(snapshot.operations()));
+            }
+            statements.extend(operation_statements(popped.operations()));
 
-            self.eval_with_origin(&*code, None);
+            let code = statements.join("\n");
+            if !code.is_empty() {
+                self.eval_with_origin(&code, None);
+            }
         }
     }
 
@@ -150,15 +194,8 @@ impl super::Worker for V8Worker {
         if code.is_empty() {
             return JsValue::NULL;
         }
-        self.eval_with_origin(&code, V8ScriptOrigin {
-            resource_line_offset: 0,
-            resource_column_offset: 0,
-            resource_is_shared_cross_origin: false,
-            script_id: -1,
-            resource_is_opaque: true,
-            is_wasm: false,
-            is_module: false,
-        }).unwrap_or(JsValue::NULL)
+        self.eval_with_origin(&code, V8ScriptOrigin::default())
+            .unwrap_or(JsValue::NULL)
     }
 
     fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue {
@@ -170,15 +207,7 @@ impl super::Worker for V8Worker {
 
         let prev_file_name = self.file_name.take();
         self.file_name = Some(path.display().to_string());
-        let result = self.eval_with_origin(&code, V8ScriptOrigin {
-            resource_line_offset: 0,
-            resource_column_offset: 0,
-            resource_is_shared_cross_origin: false,
-            script_id: -1,
-            resource_is_opaque: true,
-            is_wasm: false,
-            is_module: false,
-        });
+        let result = self.eval_with_origin(&code, V8ScriptOrigin::default());
         self.file_name = prev_file_name;
 
         result.unwrap_or(JsValue::NULL)
@@ -196,20 +225,6 @@ impl V8Worker {
             .unwrap_or_default();
         base.join(module_name)
     }
-}
-
-fn v8_value_to_json(
-    scope: &PinScope<'_, '_>, 
-    value: Local<'_, V8Value>,
-) -> JsonValue {
-    if let Some(str) = v8::json::stringify(scope, value) {
-        let str = str.to_rust_string_lossy(scope);
-        if let Ok(result) = serde_json::from_str(&*str) {
-            return result;
-        }
-    }
-
-    JsonValue::Null
 }
 
 fn v8_value_to_value(
@@ -289,7 +304,7 @@ fn v8_value_to_value_impl(
         }
 
         // Ordinary objects
-        let mut props = HashMap::<String, JsValue>::new();
+        let mut props = HashMap::<JsAtom, JsValue>::new();
         let own_keys = obj
             .get_own_property_names(
                 scope,
@@ -306,7 +321,7 @@ fn v8_value_to_value_impl(
                 let key_rust = key_str.to_rust_string_lossy(scope);
                 let val = obj.get(scope, key).unwrap();
                 props.insert(
-                    key_rust,
+                    JsAtom::from_str(&key_rust),
                     v8_value_to_value_impl(scope, val, visited),
                 );
             }

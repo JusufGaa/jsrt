@@ -7,9 +7,13 @@
 
 mod tag;
 mod builtin;
+mod atom;
 mod object;
 mod rc;
+mod symbol;
 pub mod value;
 
+pub use atom::JsAtom;
 pub use object::*;
+pub use symbol::JsSymbol;
 pub use value::JsValue;

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::atom::JsAtom;
 use super::builtin::JsInternal;
 use super::rc::RefCount;
 use super::value::JsValue;
@@ -31,8 +32,9 @@ pub(crate) enum JsClass {
 union JsObjectU {
     /// `JsClass::Array`: indexed elements
     elements: *mut Vec<JsValue>,
-    /// `JsClass::Object` / `JsClass::Error`: named properties
-    props: *mut HashMap<String, JsValue>,
+    /// `JsClass::Object` / `JsClass::Error`: named properties, keyed by
+    /// interned property keys (string or symbol, ECMA-262 4.3.30)
+    props: *mut HashMap<JsAtom, JsValue>,
     /// Other built-in classes: private data (null = not set)
     internal: *mut JsInternal,
 }
@@ -93,7 +95,7 @@ impl JsObject {
 
     /// # Panics
     /// Panics if the class is not `Object` / `Error`.
-    pub(crate) fn props(&self) -> &HashMap<String, JsValue> {
+    pub(crate) fn props(&self) -> &HashMap<JsAtom, JsValue> {
         assert!(
             matches!(self.class, JsClass::Object | JsClass::Error),
             "props are only valid for Object/Error"
@@ -103,7 +105,7 @@ impl JsObject {
 
     /// # Panics
     /// Panics if the class is not `Object` / `Error`.
-    pub(crate) fn props_mut(&mut self) -> &mut HashMap<String, JsValue> {
+    pub(crate) fn props_mut(&mut self) -> &mut HashMap<JsAtom, JsValue> {
         assert!(
             matches!(self.class, JsClass::Object | JsClass::Error),
             "props are only valid for Object/Error"
@@ -112,7 +114,7 @@ impl JsObject {
     }
 
     /// Replaces the whole property table.
-    pub(crate) fn set_props(&mut self, props: HashMap<String, JsValue>) {
+    pub(crate) fn set_props(&mut self, props: HashMap<JsAtom, JsValue>) {
         *self.props_mut() = props;
     }
 
