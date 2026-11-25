@@ -14,6 +14,7 @@ mod symbol;
 pub mod value;
 
 pub use atom::JsAtom;
+pub(crate) use builtin::JsInternal;
 pub use object::*;
 pub use symbol::JsSymbol;
 pub use value::JsValue;

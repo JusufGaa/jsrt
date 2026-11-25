@@ -75,6 +75,11 @@ impl JsObject {
         self.class == JsClass::Array
     }
 
+    /// Read the class tag.
+    pub(crate) fn class(&self) -> JsClass {
+        self.class
+    }
+
     // -- array elements (JsClass::Array) ------------------------------------
 
     /// # Panics
@@ -174,13 +179,13 @@ impl Drop for JsObject {
                     // Free owned child values recursively.
                     let mut elements = Box::from_raw(self.u.elements);
                     for v in elements.drain(..) {
-                        v.free();
+                        v.free_value();
                     }
                 }
                 JsClass::Object | JsClass::Error => {
                     let mut props = Box::from_raw(self.u.props);
                     for (_, v) in props.drain() {
-                        v.free();
+                        v.free_value();
                     }
                 }
                 _ => {

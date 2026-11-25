@@ -44,4 +44,25 @@ impl RegExpData {
             flags: mask,
         })
     }
+
+    /// Flags back as a string, in canonical (alphabetic) order, matching
+    /// `RegExp.prototype.toString`.
+    pub(crate) fn flags_string(&self) -> String {
+        let mut s = String::new();
+        for (bit, ch) in [
+            (HAS_INDICES, 'd'),
+            (GLOBAL, 'g'),
+            (IGNORE_CASE, 'i'),
+            (MULTILINE, 'm'),
+            (DOT_ALL, 's'),
+            (UNICODE, 'u'),
+            (UNICODE_SETS, 'v'),
+            (STICKY, 'y'),
+        ] {
+            if self.flags & bit != 0 {
+                s.push(ch);
+            }
+        }
+        s
+    }
 }

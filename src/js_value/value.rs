@@ -3,7 +3,8 @@ use std::fmt;
 use num_bigint::BigInt;
 
 use super::atom::JsAtom;
-use super::object::JsObject;
+use super::builtin::JsInternal;
+use super::object::{JsClass, JsObject};
 use super::rc::RefCount;
 use super::symbol::JsSymbol;
 use super::tag::JsTag;
@@ -27,7 +28,7 @@ union JsValuePayload {
 /// A JavaScript value: 16-byte tagged union, mirroring QuickJS `JSValue`.
 ///
 /// `JsValue` is `Copy`, so refcounted payloads are **not** automatically
-/// duplicated: use [`JsValue::clone_value`] / [`JsValue::free`] to manage
+/// duplicated: use [`JsValue::dup_value`] / [`JsValue::free_value`] to manage
 /// reference counts (QuickJS `JS_DupValue` / `JS_FreeValue`).
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -269,9 +270,20 @@ impl JsValue {
         }
     }
 
+    /// Stable identity key of an object value (its refcounted cell
+    /// pointer). Two object values with the same id alias the same
+    /// object; `None` for non-object values.
+    pub fn object_id(&self) -> Option<usize> {
+        if self.is_object() {
+            Some(unsafe { self.u.ptr as usize })
+        } else {
+            None
+        }
+    }
+
     /// Duplicate the value, incrementing the refcount of refcounted
     /// payloads (QuickJS `JS_DupValue`).
-    pub fn clone_value(&self) -> Self {
+    pub fn dup_value(&self) -> Self {
         if self.is_refcounted() {
             unsafe {
                 match self.tag() {
@@ -287,7 +299,7 @@ impl JsValue {
 
     /// Release the value, decrementing the refcount and freeing the
     /// payload when it reaches zero (QuickJS `JS_FreeValue`).
-    pub fn free(self) {
+    pub fn free_value(self) {
         if !self.is_refcounted() {
             return;
         }
@@ -299,6 +311,69 @@ impl JsValue {
                 _ => {}
             }
         }
+    }
+
+    /// Replay source: serialize the value back into equivalent JS
+    /// source, so it can be replayed by assigning the source to
+    /// `globalThis` when restoring a snapshot.
+    pub fn to_source(&self) -> String {
+        if self.is_undefined() {
+            return "undefined".into();
+        }
+        if self.is_null() {
+            return "null".into();
+        }
+        if self.is_boolean() {
+            return if self.as_bool().unwrap() { "true" } else { "false" }.into();
+        }
+        if self.is_number() {
+            let n = self.as_number().unwrap();
+            if n.is_nan() {
+                return "Number.NaN".into();
+            }
+            if n.is_infinite() {
+                return if n > 0.0 {
+                    "Number.POSITIVE_INFINITY".into()
+                } else {
+                    "Number.NEGATIVE_INFINITY".into()
+                };
+            }
+            return format!("{}", n);
+        }
+        if self.is_bigint() {
+            return format!("{}n", self.as_bigint().unwrap());
+        }
+        if self.is_string() {
+            return serde_json::to_string(self.as_string().unwrap_or("")).unwrap();
+        }
+        if self.is_object() {
+            let obj = self.as_object().unwrap();
+            match obj.class() {
+                JsClass::Array => {
+                    let items: Vec<String> = obj.elements().iter().map(JsValue::to_source).collect();
+                    return format!("[{}]", items.join(","));
+                }
+                JsClass::Object | JsClass::Error => {
+                    let props: Vec<String> = obj.props().iter().filter_map(|(key, value)| {
+                        let key = key.as_str()?;
+                        Some(format!("{}: {}", serde_json::to_string(key).unwrap(), value.to_source()))
+                    }).collect();
+                    return format!("{{{}}}", props.join(","));
+                }
+                // Built-in classes (Date / RegExp / Map / Set /
+                // ArrayBuffer): the replay source is produced by their
+                // private data in `JsInternal`. `Opaque` has no faithful
+                // source form and falls back to `undefined`.
+                _ => {
+                    return obj
+                        .internal()
+                        .and_then(JsInternal::to_source)
+                        .unwrap_or_else(|| "undefined".into());
+                }
+            }
+        }
+
+        "undefined".into()
     }
 }
 

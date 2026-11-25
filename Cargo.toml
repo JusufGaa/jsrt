@@ -11,6 +11,14 @@ quickjs = []
 name = "hello"
 path = "examples/hello.rs"
 
+[[example]]
+name = "eval"
+path = "examples/eval.rs"
+
+[[example]]
+name = "cycle"
+path = "examples/cycle.rs"
+
 [dependencies]
 num-bigint = "=0.5.1"
 oxc = "=0.156.0"

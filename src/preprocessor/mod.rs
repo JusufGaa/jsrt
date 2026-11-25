@@ -1,20 +1,17 @@
-use crate::runtime::Worker;
+// use crate::runtime::Worker;
+pub mod stage1;
 
-pub trait Compiled {
-    /// get 阶段，返回阶段标识。
-    fn get_stage(&self) -> u8;
+pub trait Stage {
+    /// Returns the stage identifier.
+    fn stage(&self) -> u8;
 
-    /// load 阶段：将已编译的代码交给 worker 处理。
-    fn load<W: Worker + ?Sized>(&self, worker: &mut W);
+    // /// The load stage: hands the compiled code over to a worker for processing.
+    // fn load<W: Worker + ?Sized>(&self, worker: &mut W);
 }
 
-impl<T: AsRef<str>> Compiled for T {
-    /// blanket impl 的默认实现：总是返回 0。
-    fn get_stage(&self) -> u8 {
+impl<T: AsRef<str>> Stage for T {
+    /// Default implementation of the blanket impl: always returns 0.
+    fn stage(&self) -> u8 {
         0
-    }
-
-    fn load<W: Worker + ?Sized>(&self, worker: &mut W) {
-        worker.compile(self);
     }
 }
