@@ -52,4 +52,8 @@ impl Stage for Stage1 {
     fn stage(&self) -> u8 {
         1
     }
+
+    fn get_code(&self) -> String {
+        self.code.clone()
+    } 
 }

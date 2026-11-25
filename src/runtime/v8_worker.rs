@@ -215,7 +215,7 @@ impl super::Worker for V8Worker {
     fn run(&mut self) -> JsValue {
         let code = std::mem::take(&mut self.cached_code)
             .into_iter()
-            .map(|stage| (&*stage).as_ref().to_string())
+            .map(|stage| (&*stage).get_code())
             .collect::<Vec<_>>()
             .join("\n");
         if code.is_empty() {

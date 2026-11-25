@@ -7,6 +7,7 @@ pub trait Stage {
 
     // /// The load stage: hands the compiled code over to a worker for processing.
     // fn load<W: Worker + ?Sized>(&self, worker: &mut W);
+    fn get_code(&self) -> String;
 }
 
 impl<T: AsRef<str>> Stage for T {
@@ -14,4 +15,8 @@ impl<T: AsRef<str>> Stage for T {
     fn stage(&self) -> u8 {
         0
     }
+
+    fn get_code(&self) -> String {
+        self.as_ref().to_string()
+    } 
 }
