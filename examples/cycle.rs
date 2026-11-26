@@ -24,7 +24,7 @@ fn main() {
     worker.save();
 
     // Drop everything, then bring the snapshot back.
-    // worker.eval("a = null; b = null; list = null;");
+    worker.eval("a = null; b = null; list = null;");
     worker.restore();
     let result = worker.eval("a.name");
     println!("after restore a.name = {}", result);

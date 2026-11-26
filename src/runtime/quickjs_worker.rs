@@ -19,7 +19,8 @@ use super::Worker;
 /// QuickJS (rquickjs) implementation of [`Worker`].
 pub struct QuickJsWorker {
     file_name: Option<String>,
-    cached_code: Vec<Box<dyn Stage>>,
+    /// Code chunks taken at `load` time, evaluated at `run` time.
+    code: Vec<String>,
     runtime: Runtime,
     context: Context,
     /// History of snapshots (one per `save`).
@@ -36,7 +37,7 @@ impl QuickJsWorker {
 
         QuickJsWorker {
             file_name: None,
-            cached_code: Vec::new(),
+            code: Vec::new(),
             runtime,
             context,
             snapshots: Vec::new(),
@@ -147,20 +148,21 @@ impl Worker for QuickJsWorker {
         self.context = context;
     }
 
-    fn load(&mut self, code: impl Stage + 'static) {
-        self.cached_code.push(Box::new(code));
+    fn load(&mut self, code: impl Stage) {
+        self.code.extend(code.get_code().map(str::to_string));
     }
 
     fn run(&mut self) -> JsValue {
-        let code = std::mem::take(&mut self.cached_code)
-            .into_iter()
-            .map(|stage| (&*stage).as_ref().to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if code.is_empty() {
-            return JsValue::NULL;
+        let chunks = std::mem::take(&mut self.code);
+        let mut last = JsValue::NULL;
+        for chunk in chunks {
+            match self.eval_code(&chunk, None) {
+                Some(value) => last = value,
+                // A runtime error stops the remaining chunks.
+                None => break,
+            }
         }
-        self.eval_code(&code, None).unwrap_or(JsValue::NULL)
+        last
     }
 
     fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue {

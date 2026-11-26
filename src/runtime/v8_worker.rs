@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use v8::{
-    Global, OwnedIsolate, PinScope, Context,
+    Global, OwnedIsolate, PinScope, Context, UnboundScript,
     Local, Value as V8Value, Array, GetPropertyNamesArgs,
     KeyCollectionMode,
 };
@@ -15,7 +15,8 @@ use super::global_this::{
 
 pub struct V8Worker {
     file_name: Option<String>,
-    cached_code: Vec<Box<dyn Stage>>,
+    /// Code chunks compiled at `load` time, run at `run` time.
+    code: Vec<Global<UnboundScript>>,
     isolate: OwnedIsolate,
     context: Global<Context>,
     /// History of snapshots (one per `save`).
@@ -58,7 +59,7 @@ impl V8Worker {
 
         V8Worker {
             file_name: None,
-            cached_code: Vec::new(),
+            code: Vec::new(),
             isolate,
             context,
             snapshots: Vec::new(),
@@ -208,21 +209,44 @@ impl super::Worker for V8Worker {
         self.context = Self::new_context(&mut self.isolate);
     }
 
-    fn load(&mut self, code: impl Stage + 'static) {
-        self.cached_code.push(Box::new(code));
+    fn load(&mut self, code: impl Stage) {
+        for chunk in code.get_code() {
+            let (script, error) = self.with_scope(|scope, _| {
+                v8::tc_scope!(let tc, scope);
+                let script = v8::String::new(&tc, chunk)
+                    .and_then(|source| v8::Script::compile(&tc, source, None))
+                    .map(|script| script.get_unbound_script(&tc))
+                    .map(|unbound| Global::new(&tc, unbound));
+                (script, format_tc_exception(&tc))
+            });
+            self.last_error = error.or_else(|| self.last_error.take());
+            if let Some(script) = script {
+                self.code.push(script);
+            }
+        }
     }
 
     fn run(&mut self) -> JsValue {
-        let code = std::mem::take(&mut self.cached_code)
-            .into_iter()
-            .map(|stage| (&*stage).get_code())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if code.is_empty() {
-            return JsValue::NULL;
+        let compiled = std::mem::take(&mut self.code);
+        let mut last = JsValue::NULL;
+        for script in compiled {
+            let (value, error) = self.with_scope(|scope, _| {
+                v8::tc_scope!(let tc, scope);
+                let script = Local::new(&tc, &script);
+                let bound = script.bind_to_current_context(&tc);
+                let value = bound
+                    .run(&tc)
+                    .map(|result| v8_value_to_value(&tc, result.into()));
+                (value, format_tc_exception(&tc))
+            });
+            self.last_error = error;
+            match value {
+                Some(v) => last = v,
+                // A runtime error stops the remaining scripts.
+                None => break,
+            }
         }
-        self.eval_with_origin(&code, V8ScriptOrigin::default())
-            .unwrap_or(JsValue::NULL)
+        last
     }
 
     fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue {

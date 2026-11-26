@@ -12,7 +12,8 @@ pub trait Worker {
     /// Reset the engine to a brand-new context: all current script
     /// state is discarded (snapshots / tracked state are untouched).
     fn clean(&mut self);
-    fn load(&mut self, code: impl Stage + 'static);
+    /// Compiles the stage's code chunks immediately; `run` executes them.
+    fn load(&mut self, code: impl Stage);
     fn run(&mut self) -> JsValue;
     fn import(&mut self, module_name: impl AsRef<Path>) -> JsValue;
 
@@ -69,7 +70,7 @@ pub trait Worker {
         }
     }
 
-    fn eval(&mut self, code: impl AsRef<str> + 'static) -> JsValue {
+    fn eval(&mut self, code: impl AsRef<str>) -> JsValue {
         self.load(code);
         self.run()
     }
