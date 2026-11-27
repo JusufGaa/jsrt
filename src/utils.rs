@@ -1,3 +1,43 @@
+use std::fmt;
+
+/// Indentation state for formatted output: how many spaces per level
+/// (`width`) and how many levels are already applied (`depth`).
+pub struct Indent {
+    /// Spaces per indentation level.
+    pub width: usize,
+    /// Number of levels already indented.
+    pub depth: usize,
+}
+
+impl Default for Indent {
+    /// `Indent { width: 4, depth: 0 }`.
+    fn default() -> Self {
+        Self { width: 4, depth: 0 }
+    }
+}
+
+impl Indent {
+    pub fn new(width: usize, depth: usize) -> Self {
+        Self { width, depth }
+    }
+
+    /// The leading spaces for the current level.
+    pub fn pad(&self) -> String {
+        " ".repeat(self.width * self.depth)
+    }
+
+    /// One level deeper, same width.
+    pub fn next(&self) -> Self {
+        Self { width: self.width, depth: self.depth + 1 }
+    }
+}
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.pad())
+    }
+}
+
 pub(crate) fn format_string(s: &str, quote: impl Into<Option<char>>) -> String {
     let quote = quote.into();
     debug_assert!(
